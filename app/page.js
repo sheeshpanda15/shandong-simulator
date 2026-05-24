@@ -1,7 +1,7 @@
 "use client";
 
 import React, { useState, useEffect, useRef } from "react";
-import { Send, Loader2, RotateCcw, ChevronRight, Skull, Settings, Coffee, X, ExternalLink, FileText, ShieldAlert } from "lucide-react";
+import { Send, Loader2, RotateCcw, ChevronRight, Skull, Settings, Coffee, X, ExternalLink, FileText, ShieldAlert, Image as ImageIcon, ImageOff, Zap } from "lucide-react";
 import {
   DISCLAIMER_SHORT, DISCLAIMER_FULL,
   ACKNOWLEDGE_BUTTON, DECLINE_BUTTON,
@@ -36,7 +36,7 @@ const CHARACTERS = {
   },
   baogong: {
     name: "郑哥", short: "包工头", title: "包工头 · 暴发户", color: "#704040", seat: 6,
-    persona: "50岁包工头,刚发大财。粗俗金链子。爱炫'我儿子在美国'、'我刚提了辆S级'。粗话不断('你妹的')但对领导秒变笑脸。"
+    persona: "50岁包工头,刚发大财。粗俗金链子。爱炫'我儿子在美国'、'我刚提了辆S级'。粗话不断('你妹的')但对领导秒变笑脸。声称自己酒精过敏,实际能喝。"
   },
   laohu: {
     name: "老胡", short: "老胡", title: "李主任发小 · 退休", color: "#7a5d8a", seat: 7,
@@ -58,33 +58,35 @@ const CHARACTERS = {
 
 const CHAR_ORDER = ["zhuren","wudong","fuzong","kezhang","xiaoLiu","xiaoQian","baogong","laohu","sijiQiang","guanxihu","mishu"];
 
+// ============ 菜品配置(加入朝向)============
 const DISHES = [
   { name: "凉拌黄瓜", note: "形似某物 · 必有人开黄腔" },
-  { name: "海参捞饭", note: "贵气 · 主任和吴总互相夹给对方" },
+  { name: "海参捞饭", note: "贵气 · 主任和吴总互相夹给对方", orientation: "海参朝主任", orientTo: "zhuren" },
   { name: "大葱蘸酱", note: "山东标配 · 真材实料" },
-  { name: "整条糖醋鲤鱼", note: "鱼头朝主位 · '鱼头敬人三杯'" },
+  { name: "整条糖醋鲤鱼", note: "鱼头敬人三杯", orientation: "鱼头正对主任", orientTo: "zhuren" },
   { name: "九转大肠", note: "'九转'谐音可玩" },
   { name: "白灼大虾", note: "'给您面子' · 一人一只" },
   { name: "葱烧海参", note: "双重贵气 · 海参象征'参'" },
-  { name: "德州扒鸡", note: "'扒'字可玩 · 鸡爪叫'抓钱手'" },
+  { name: "德州扒鸡", note: "鸡爪叫'抓钱手'", orientation: "鸡头朝吴总", orientTo: "wudong" },
   { name: "鲍鱼捞饭", note: "极尽奢华 · '包您发'" },
-  { name: "煎饼卷大葱", note: "假装接地气 · 实则炫耀'我们山东人'" },
+  { name: "煎饼卷大葱", note: "假装接地气 · '我们山东人'" },
   { name: "招财进宝水饺", note: "饺子里有硬币 · 谁吃到谁今年发财" },
-  { name: "三十年茅台压轴", note: "最后的劝酒高潮 · 不喝就是不给面子" }
+  { name: "三十年茅台压轴", note: "最后劝酒高潮 · 不喝就是不给面子", orientation: "酒瓶置于主位前", orientTo: "zhuren" }
 ];
+
+const MAX_TURNS_PER_DISH = 5;
 
 const LS_KEY_API = "sds_user_gemini_key";
 const LS_KEY_GAMES = "sds_games_played";
 const LS_KEY_DISCLAIMER = "sds_disclaimer_accepted";
+const LS_KEY_IMAGES = "sds_images_enabled";
 
 // ============ Markdown 渲染助手 ============
-// 支持 **加粗** 和 - 列表项,段落用空行分隔
 function renderRichText(text) {
   const paragraphs = text.trim().split(/\n\s*\n/);
   return paragraphs.map((para, pi) => {
     const lines = para.split("\n");
     const isList = lines.every(l => l.trim().startsWith("- ") || l.trim() === "");
-
     if (isList) {
       return (
         <ul key={pi} className="mb-3 space-y-1" style={{ paddingLeft: "1em" }}>
@@ -97,7 +99,6 @@ function renderRichText(text) {
         </ul>
       );
     }
-
     return (
       <p key={pi} className="mb-3 leading-relaxed">
         {lines.map((line, li) => (
@@ -121,6 +122,62 @@ function renderBold(text) {
   });
 }
 
+// ============ 角色头像组件(支持图片切换)============
+function CharAvatar({ charId, size = 32, showImages }) {
+  const c = CHARACTERS[charId];
+  if (!c) return null;
+  const [imgFailed, setImgFailed] = useState(false);
+
+  if (showImages && !imgFailed) {
+    return (
+      <div className="flex-shrink-0 rounded-full overflow-hidden relative"
+        style={{ width: size, height: size, background: c.color }}>
+        {/* eslint-disable-next-line @next/next/no-img-element */}
+        <img src={`/images/char-${charId}.jpg`} alt={c.name}
+          className="w-full h-full object-cover"
+          onError={() => setImgFailed(true)} />
+      </div>
+    );
+  }
+  return (
+    <div className="flex-shrink-0 rounded-full flex items-center justify-center font-bold"
+      style={{ width: size, height: size, background: c.color, color: "#fff", fontSize: size * 0.32 }}>
+      {c.short.slice(0, 1)}
+    </div>
+  );
+}
+
+// ============ 菜品图片卡片 ============
+function DishImage({ dishIdx, showImages }) {
+  const d = DISHES[dishIdx];
+  const [imgFailed, setImgFailed] = useState(false);
+  useEffect(() => { setImgFailed(false); }, [dishIdx]);
+
+  if (!showImages) return null;
+  return (
+    <div className="mt-3 rounded-lg overflow-hidden" style={{
+      background: "rgba(0,0,0,0.4)", border: "1px solid #5c3a2a"
+    }}>
+      <div className="aspect-video flex items-center justify-center relative" style={{
+        background: imgFailed ? "rgba(201,165,88,0.05)" : "#1a0a04"
+      }}>
+        {!imgFailed && (
+          /* eslint-disable-next-line @next/next/no-img-element */
+          <img src={`/images/dish-${dishIdx}.jpg`} alt={d.name}
+            className="w-full h-full object-cover"
+            onError={() => setImgFailed(true)} />
+        )}
+        {imgFailed && (
+          <div className="text-center px-4 py-3 text-xs" style={{ color: "#9c8068" }}>
+            <div style={{ fontFamily: "'Ma Shan Zheng', cursive", fontSize: "1.5rem", color: "#c9a558" }}>{d.name}</div>
+            <div className="mt-1 italic">(图片即将上线)</div>
+          </div>
+        )}
+      </div>
+    </div>
+  );
+}
+
 export default function ShandongSimulator() {
   const [phase, setPhase] = useState("intro");
   const [dishIdx, setDishIdx] = useState(0);
@@ -140,10 +197,12 @@ export default function ShandongSimulator() {
   const [gamesPlayed, setGamesPlayed] = useState(0);
   const [keyInput, setKeyInput] = useState("");
 
-  // 免责声明状态
-  const [disclaimerAccepted, setDisclaimerAccepted] = useState(true); // 默认 true 避免 SSR 闪烁
+  const [disclaimerAccepted, setDisclaimerAccepted] = useState(true);
   const [showFullDisclaimer, setShowFullDisclaimer] = useState(false);
   const [hydrated, setHydrated] = useState(false);
+
+  // 图片开关
+  const [showImages, setShowImages] = useState(false);
 
   const scrollRef = useRef(null);
 
@@ -152,10 +211,12 @@ export default function ShandongSimulator() {
       const k = localStorage.getItem(LS_KEY_API) || "";
       const g = parseInt(localStorage.getItem(LS_KEY_GAMES) || "0", 10);
       const accepted = localStorage.getItem(LS_KEY_DISCLAIMER) === DISCLAIMER_VERSION;
+      const img = localStorage.getItem(LS_KEY_IMAGES) === "1";
       setUserKey(k);
       setKeyInput(k);
       setGamesPlayed(g);
       setDisclaimerAccepted(accepted);
+      setShowImages(img);
       setHydrated(true);
     }
   }, []);
@@ -164,19 +225,23 @@ export default function ShandongSimulator() {
     if (scrollRef.current) scrollRef.current.scrollTop = scrollRef.current.scrollHeight;
   }, [history, loading]);
 
-  const acceptDisclaimer = () => {
+  const toggleImages = () => {
+    const next = !showImages;
+    setShowImages(next);
     if (typeof window !== "undefined") {
-      localStorage.setItem(LS_KEY_DISCLAIMER, DISCLAIMER_VERSION);
+      localStorage.setItem(LS_KEY_IMAGES, next ? "1" : "0");
     }
+  };
+
+  const acceptDisclaimer = () => {
+    if (typeof window !== "undefined") localStorage.setItem(LS_KEY_DISCLAIMER, DISCLAIMER_VERSION);
     setDisclaimerAccepted(true);
   };
 
   const declineDisclaimer = () => {
     if (DECLINE_REDIRECT_URL && typeof window !== "undefined") {
       window.location.href = DECLINE_REDIRECT_URL;
-    } else if (typeof window !== "undefined") {
-      window.close();
-    }
+    } else if (typeof window !== "undefined") window.close();
   };
 
   const saveKey = () => {
@@ -194,9 +259,7 @@ export default function ShandongSimulator() {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
-        system: systemPrompt,
-        user: userMessage,
-        userKey: userKey || undefined,
+        system: systemPrompt, user: userMessage, userKey: userKey || undefined,
       }),
     });
     const data = await res.json();
@@ -204,6 +267,7 @@ export default function ShandongSimulator() {
     return data;
   };
 
+  // ========= 游戏主循环 =========
   const callGM = async (userAction, isNewDish = false) => {
     setLoading(true);
     setError(null);
@@ -211,40 +275,64 @@ export default function ShandongSimulator() {
     const charList = CHAR_ORDER.map(id => `- ${id}(${CHARACTERS[id].name}): ${CHARACTERS[id].persona}`).join("\n");
     const recentHistory = history.slice(-12).map(h => {
       if (h.type === "narration") return `[场景] ${h.text}`;
+      if (h.type === "event") return `[突发事件] ${h.title}: ${h.text}`;
       if (h.type === "user") return `你(小李): ${h.text}`;
       return `${CHARACTERS[h.char_id]?.name}: ${h.text}`;
     }).join("\n");
 
-    const sysPrompt = `你是一个讽刺剧的游戏总监(Game Master),运行《山东酒桌模拟器》黑色幽默讽刺游戏。
+    const currentDish = DISHES[dishIdx];
+    const orientInfo = currentDish.orientation ? `朝向: ${currentDish.orientation}(${CHARACTERS[currentDish.orientTo]?.name}位置)` : "";
 
-【讽刺基调】对中国部分地区酒桌文化异化的讽刺,不针对地域人群,而是批判权力结构下的人性扭曲。玩家分数越高(谄媚+猥琐),越揭示玩家被同化。秘书小林等弱势角色应被同情刻画。
+    const sysPrompt = `你是讽刺剧游戏总监,运行《山东酒桌模拟器》黑色幽默讽刺游戏。
+
+【讽刺基调】对酒桌文化异化的批判,**不针对地域人群**,而是讽刺权力结构下的人性扭曲。分数越高(谄媚+猥琐),越揭示玩家被同化。秘书小林等弱势角色应被同情刻画。
 
 【11个角色】
 ${charList}
 
-【当前情况】
-- 菜品(第${dishIdx+1}/12道): ${DISHES[dishIdx].name} · ${DISHES[dishIdx].note}
-- 分数: 谄媚${scores.flattery} 猥琐${scores.lewdness} 人格${scores.dignity}
-- 最近对话:
+【当前菜品】第${dishIdx+1}/12道: ${currentDish.name} · ${currentDish.note} ${orientInfo}
+
+【当前分数】谄媚${scores.flattery} 猥琐${scores.lewdness} 人格${scores.dignity}
+【已对话轮次】${turnInDish}/${MAX_TURNS_PER_DISH}
+【最近对话】
 ${recentHistory || "(刚开始)"}
 
 【刚刚发生】
-${isNewDish ? `服务员端上"${DISHES[dishIdx].name}"。生成场景+2-3角色反应。` : `玩家(小李)说: "${userAction}"`}
+${isNewDish ? `服务员端上"${currentDish.name}"。${currentDish.orientation ? `**注意菜品摆放朝向: ${currentDish.orientation}**(这本身就是社交信号,可被角色拿来做文章)。` : ""}生成场景+2-3角色反应。` : `玩家(小李)说: "${userAction}"`}
 
-【输出 JSON 格式,所有内容简洁】
+【突发事件机制】约 30-40% 几率插入突发事件(新菜上桌或中间轮次都可触发):
+- force_toast: 某人强制敬酒,玩家必须接(干杯/拒绝/想办法躲)
+- allergy: 某人(可能假装)酒精过敏要求别人替喝
+- bottle_empty: 这瓶酒喝完了,谁掏钱买新的?
+- trunk_empty: 领导让玩家去后备箱取酒,后备箱空了(玩家要怎么解释)
+- spouse_call: 某人手机响,配偶来电查岗,场面尴尬
+- secretary_leave: 秘书小林借故离开(去洗手间/接电话/找借口)
+- connection_call: 关系户宝宝接到姐夫电话,瞬间变脸说一些让全桌紧张的话
+- drunk_accident: 有人喝多了出洋相(吐/摔/失言)
+- boss_test: 领导突然出难题考验玩家应变("小李,你说说为啥...")
+- party_crasher: 不速之客闯入(欠债的、前任、对手公司的人)
+
+如要触发事件,在 JSON 中加入 event 字段:
+"event": {"type": "事件类型", "title": "短标题如'强制敬酒!'", "description": "30-80字事件描述"}
+
+事件应带来戏剧性,但不要每道菜都触发。前期(1-3道菜)少触发,中后期(5道之后)多触发。
+
+【输出 JSON,简洁】
 {
-  "narration": "简短场景描述(<=50字),无则 null",
+  "narration": "<=50字场景,无则null",
   "responses": [{"char_id": "ID", "text": "<=60字台词"}],
+  "event": null 或 {"type":"","title":"","description":""},
   "score_delta": {"flattery": 0-15, "lewdness": 0-15, "dignity": -10到5},
   "score_reason": "简短理由"
 }
 
 【关键】
-1. 1-3条响应,最相关的角色
-2. 台词鲜活有方言感
+1. 1-3条响应,只让相关角色说话
+2. 台词鲜活带方言感
 3. 竞争者小刘常拆你台
 4. 秘书小林被骚扰要让玩家不适——讽刺核心
-5. 玩家反抗→人格上升;卑躬屈膝→谄媚上升;开黄腔→猥琐上升`;
+5. 玩家反抗→人格上升;卑躬屈膝→谄媚上升;开黄腔→猥琐上升
+6. 菜品有朝向时,角色可借机做文章("鱼头朝主任,这是规矩"/"主任,这鱼头敬您")`;
 
     const userMsg = isNewDish ? "请生成上菜场景和角色反应" : userAction;
 
@@ -253,6 +341,15 @@ ${isNewDish ? `服务员端上"${DISHES[dishIdx].name}"。生成场景+2-3角色
       const newHistory = [...history];
       if (!isNewDish && userAction) newHistory.push({ type: "user", text: userAction });
       if (parsed.narration) newHistory.push({ type: "narration", text: parsed.narration });
+      // 事件单独高亮
+      if (parsed.event && parsed.event.title) {
+        newHistory.push({
+          type: "event",
+          eventType: parsed.event.type || "unknown",
+          title: parsed.event.title,
+          text: parsed.event.description || ""
+        });
+      }
       for (const r of parsed.responses || []) {
         newHistory.push({ type: "char", char_id: r.char_id, text: r.text });
       }
@@ -268,7 +365,16 @@ ${isNewDish ? `服务员端上"${DISHES[dishIdx].name}"。生成场景+2-3角色
           setScoreLog(prev => [...prev.slice(-4), parsed.score_reason]);
         }
       }
-      if (!isNewDish) setTurnInDish(t => t + 1);
+
+      // 强制推进
+      if (!isNewDish) {
+        const nextTurn = turnInDish + 1;
+        setTurnInDish(nextTurn);
+        if (nextTurn >= MAX_TURNS_PER_DISH) {
+          setHistory(h => [...h, { type: "narration", text: "(服务员端着新菜走来,招呼要换盘子...)" }]);
+          setTimeout(() => nextDish(), 2200);
+        }
+      }
     } catch (e) {
       setError(e.message || "AI 总监打嗝了");
     } finally {
@@ -294,9 +400,7 @@ ${isNewDish ? `服务员端上"${DISHES[dishIdx].name}"。生成场景+2-3角色
     setLoading(true);
     try {
       const sysPrompt = "你是讽刺剧总结员,用黑色幽默风格输出 JSON。";
-      const userMsg = `游戏终局总结。
-最终分数: 谄媚${scores.flattery} 猥琐${scores.lewdness} 人格${scores.dignity}
-
+      const userMsg = `游戏终局总结。最终分数: 谄媚${scores.flattery} 猥琐${scores.lewdness} 人格${scores.dignity}
 输出 JSON: {"title": "称号", "verdict": "100-150字黑色幽默总结", "consequence": "一句话后续"}`;
 
       const parsed = await callBackend(sysPrompt, userMsg);
@@ -315,9 +419,7 @@ ${isNewDish ? `服务员端上"${DISHES[dishIdx].name}"。生成场景+2-3角色
         consequence: "你打车回家。"
       });
       setPhase("ending");
-    } finally {
-      setLoading(false);
-    }
+    } finally { setLoading(false); }
   };
 
   const handleSend = () => {
@@ -337,8 +439,27 @@ ${isNewDish ? `服务员端上"${DISHES[dishIdx].name}"。生成场景+2-3角色
     setInput(""); setError(null); setFinalReport(null);
   };
 
+  // ============ 圆桌 SVG ============
   const SeatingTable = () => {
     const cx = 150, cy = 150, r = 105, total = 12;
+    const currentDish = DISHES[dishIdx];
+
+    // 朝向箭头
+    let arrowEl = null;
+    if (currentDish?.orientTo) {
+      const targetSeat = CHARACTERS[currentDish.orientTo].seat;
+      const angle = (targetSeat / total) * 2 * Math.PI - Math.PI / 2;
+      const ax = cx + 55 * Math.cos(angle);
+      const ay = cy + 55 * Math.sin(angle);
+      arrowEl = (
+        <g>
+          <line x1={cx} y1={cy} x2={ax} y2={ay} stroke="#c9a558" strokeWidth="1.5" strokeDasharray="3,2" opacity="0.7" />
+          <polygon points={`${ax},${ay} ${ax - 6*Math.cos(angle - 0.4)},${ay - 6*Math.sin(angle - 0.4)} ${ax - 6*Math.cos(angle + 0.4)},${ay - 6*Math.sin(angle + 0.4)}`}
+            fill="#c9a558" opacity="0.9" />
+        </g>
+      );
+    }
+
     return (
       <svg viewBox="0 0 300 300" className="w-full h-full">
         <defs>
@@ -353,22 +474,31 @@ ${isNewDish ? `服务员端上"${DISHES[dishIdx].name}"。生成场景+2-3角色
         </defs>
         <circle cx={cx} cy={cy} r={70} fill="url(#tableGrad)" stroke="#7a5028" strokeWidth="2" />
         <circle cx={cx} cy={cy} r={50} fill="none" stroke="#c9a558" strokeWidth="0.5" opacity="0.3" />
-        <text x={cx} y={cy - 8} textAnchor="middle" fontSize="11" fill="#c9a558" style={{fontFamily: "'Ma Shan Zheng', cursive"}}>
+        <text x={cx} y={cy - 16} textAnchor="middle" fontSize="10" fill="#9c8068">
           第{dishIdx + 1}道
         </text>
-        <text x={cx} y={cy + 10} textAnchor="middle" fontSize="9" fill="#e8d5a8">
-          {DISHES[dishIdx]?.name.length > 6 ? DISHES[dishIdx]?.name.slice(0,5)+'…' : DISHES[dishIdx]?.name}
+        <text x={cx} y={cy - 2} textAnchor="middle" fontSize="11" fill="#e8d5a8" style={{fontFamily: "'Ma Shan Zheng', cursive"}}>
+          {currentDish?.name.length > 6 ? currentDish?.name.slice(0,5)+'…' : currentDish?.name}
         </text>
+        {arrowEl}
+        {currentDish?.orientation && (
+          <text x={cx} y={cy + 22} textAnchor="middle" fontSize="7" fill="#c9a558">
+            {currentDish.orientation}
+          </text>
+        )}
+
         {CHAR_ORDER.map((cid) => {
           const c = CHARACTERS[cid];
           const angle = (c.seat / total) * 2 * Math.PI - Math.PI / 2;
           const x = cx + r * Math.cos(angle);
           const y = cy + r * Math.sin(angle);
           const isActive = activeChar === cid;
+          const isOrientTarget = currentDish?.orientTo === cid;
           return (
             <g key={cid} style={{cursor: "pointer"}} onClick={() => setActiveChar(activeChar === cid ? null : cid)}>
               <circle cx={x} cy={y} r={isActive ? 14 : 11} fill={c.color}
-                stroke={isActive ? "#fff" : "#2a1810"} strokeWidth={isActive ? 2 : 1}
+                stroke={isActive ? "#fff" : (isOrientTarget ? "#c9a558" : "#2a1810")}
+                strokeWidth={isActive || isOrientTarget ? 2 : 1}
                 filter={isActive ? "url(#seatGlow)" : undefined} />
               <text x={x} y={y + 3} textAnchor="middle" fontSize="8" fill="#fff" fontWeight="bold">
                 {c.short.slice(0,2)}
@@ -393,6 +523,7 @@ ${isNewDish ? `服务员端上"${DISHES[dishIdx].name}"。生成场景+2-3角色
 
   const showFreemiumNudge = phase === "intro" && gamesPlayed >= 1 && !userKey;
   const showDisclaimerBlocker = hydrated && !disclaimerAccepted;
+  const currentDish = DISHES[dishIdx];
 
   return (
     <div className="min-h-screen w-full relative" style={{
@@ -403,22 +534,29 @@ ${isNewDish ? `服务员端上"${DISHES[dishIdx].name}"。生成场景+2-3角色
       {!showDisclaimerBlocker && (
         <div className="absolute top-4 right-4 flex items-center gap-2 z-20">
           {userKey && (
-            <div className="px-2 py-1 text-xs rounded-full" style={{
+            <div className="px-2 py-1 text-xs rounded-full hidden sm:block" style={{
               background: "rgba(90,122,62,0.2)", color: "#a8c084", border: "1px solid #5a7a3e"
-            }}>
-              · 使用自带 key ·
-            </div>
+            }}>· 自带 key ·</div>
           )}
+          <button onClick={toggleImages}
+            className="p-2 rounded-full transition-all hover:bg-stone-800"
+            style={{
+              background: showImages ? "rgba(201,165,88,0.2)" : "rgba(0,0,0,0.4)",
+              border: "1px solid #5c3a2a", color: showImages ? "#c9a558" : "#9c8068"
+            }}
+            title={showImages ? "关闭图片模式" : "开启图片模式"}>
+            {showImages ? <ImageIcon className="w-4 h-4" /> : <ImageOff className="w-4 h-4" />}
+          </button>
           <button onClick={() => { setKeyInput(userKey); setShowSettings(true); }}
             className="p-2 rounded-full transition-all hover:bg-stone-800"
             style={{ background: "rgba(0,0,0,0.4)", border: "1px solid #5c3a2a", color: "#c9a558" }}
-            title="设置 API Key">
+            title="设置">
             <Settings className="w-4 h-4" />
           </button>
         </div>
       )}
 
-      {/* 右下角:打赏按钮 */}
+      {/* 打赏按钮 */}
       {!showDisclaimerBlocker && (
         <button onClick={() => setShowDonate(true)}
           className="fixed bottom-6 right-6 z-20 flex items-center gap-2 px-4 py-2 rounded-full transition-all hover:scale-105 shadow-lg"
@@ -436,16 +574,11 @@ ${isNewDish ? `服务员端上"${DISHES[dishIdx].name}"。生成场景+2-3角色
           <div className="min-h-[80vh] flex flex-col items-center justify-center text-center">
             <div className="mb-4 px-4 py-1 rounded-full text-xs tracking-widest" style={{
               background: "rgba(201,165,88,0.15)", color: "#c9a558", border: "1px solid #c9a558"
-            }}>
-              · 黑色幽默 · 文化讽刺 · 18+ ·
-            </div>
+            }}>· 黑色幽默 · 文化讽刺 · 18+ ·</div>
             <h1 className="text-7xl md:text-8xl mb-2" style={{
-              fontFamily: "'Ma Shan Zheng', cursive",
-              color: "#c9a558",
+              fontFamily: "'Ma Shan Zheng', cursive", color: "#c9a558",
               textShadow: "0 0 30px rgba(201,165,88,0.4), 2px 2px 0 #4a1f15"
-            }}>
-              山东酒桌模拟器
-            </h1>
+            }}>山东酒桌模拟器</h1>
             <p className="text-2xl mb-8" style={{ color: "#a8748a", fontFamily: "'Fraunces', serif", fontStyle: "italic" }}>
               The Banquet of Souls
             </p>
@@ -455,8 +588,7 @@ ${isNewDish ? `服务员端上"${DISHES[dishIdx].name}"。生成场景+2-3角色
                 你叫小李,普通职员。今晚被张副总拽到酒局——李主任主陪,吴总作客,桌上还有八九个各色人等。
               </p>
               <p className="leading-relaxed">
-                十二道菜,你要在每道菜上做文章——拍马屁、敬酒、接黄段子、躲明枪暗箭。
-                你的<span style={{color:"#c9a558"}}>谄媚指数</span>和<span style={{color:"#a83232"}}>猥琐指数</span>会被悄悄记录。
+                十二道菜,每道菜最多五轮对话。你要在每道菜上做文章——拍马屁、敬酒、躲突发事件、应付明枪暗箭。你的<span style={{color:"#c9a558"}}>谄媚指数</span>和<span style={{color:"#a83232"}}>猥琐指数</span>会被悄悄记录。
               </p>
             </div>
 
@@ -490,9 +622,7 @@ ${isNewDish ? `服务员端上"${DISHES[dishIdx].name}"。生成场景+2-3角色
                 background: "linear-gradient(135deg, #c9a558 0%, #a8842d 100%)",
                 color: "#2a1208", fontFamily: "'Noto Serif SC', serif", fontWeight: 700,
                 boxShadow: "0 4px 20px rgba(201,165,88,0.3)"
-              }}>
-              入座 →
-            </button>
+              }}>入座 →</button>
           </div>
         )}
 
@@ -500,11 +630,16 @@ ${isNewDish ? `服务员端上"${DISHES[dishIdx].name}"。生成场景+2-3角色
           <>
             <div className="mb-4 grid grid-cols-1 md:grid-cols-4 gap-3">
               <div className="md:col-span-1 p-3 rounded-lg" style={{ background: "rgba(0,0,0,0.4)", border: "1px solid #5c3a2a" }}>
-                <div className="text-xs tracking-widest mb-1" style={{ color: "#9c8068" }}>进度</div>
+                <div className="text-xs tracking-widest mb-1" style={{ color: "#9c8068" }}>
+                  进度 · 本轮 {turnInDish}/{MAX_TURNS_PER_DISH}
+                </div>
                 <div className="text-xl" style={{ color: "#c9a558", fontFamily: "'Ma Shan Zheng', cursive" }}>
                   {dishIdx + 1} / 12
                 </div>
-                <div className="text-xs mt-1" style={{ color: "#e8d5a8" }}>{DISHES[dishIdx]?.name}</div>
+                <div className="text-xs mt-1" style={{ color: "#e8d5a8" }}>{currentDish?.name}</div>
+                {currentDish?.orientation && (
+                  <div className="text-xs mt-1 italic" style={{ color: "#c9a558" }}>↗ {currentDish.orientation}</div>
+                )}
               </div>
               {[
                 { key: "flattery", label: "谄媚指数", color: "#c9a558" },
@@ -528,7 +663,30 @@ ${isNewDish ? `服务员端上"${DISHES[dishIdx].name}"。生成场景+2-3角色
                 <div className="rounded-lg p-3" style={{ background: "rgba(0,0,0,0.4)", border: "1px solid #5c3a2a" }}>
                   <div className="text-xs tracking-widest mb-2" style={{ color: "#9c8068" }}>圆桌座次 (点头像查看)</div>
                   <div className="aspect-square"><SeatingTable /></div>
-                  {activeChar && (
+
+                  {/* 图片模式: 当前菜品 */}
+                  <DishImage dishIdx={dishIdx} showImages={showImages} />
+
+                  {/* 图片模式: 角色卡 */}
+                  {showImages && activeChar && (
+                    <div className="mt-3 p-3 rounded-lg flex gap-3 items-start" style={{
+                      background: "rgba(201,165,88,0.08)", border: `1px solid ${CHARACTERS[activeChar].color}`
+                    }}>
+                      <CharAvatar charId={activeChar} size={56} showImages={true} />
+                      <div className="flex-1 min-w-0">
+                        <div style={{ color: CHARACTERS[activeChar].color, fontWeight: 700, fontSize: "0.9rem" }}>
+                          {CHARACTERS[activeChar].name}
+                        </div>
+                        <div className="text-xs" style={{ color: "#9c8068" }}>{CHARACTERS[activeChar].title}</div>
+                        <div className="text-xs mt-1" style={{ color: "#e8d5a8", lineHeight: 1.5 }}>
+                          {CHARACTERS[activeChar].persona}
+                        </div>
+                      </div>
+                    </div>
+                  )}
+
+                  {/* 非图片模式: 角色卡 */}
+                  {!showImages && activeChar && (
                     <div className="mt-3 p-2 rounded text-xs" style={{ background: "rgba(201,165,88,0.1)", border: `1px solid ${CHARACTERS[activeChar].color}` }}>
                       <div style={{ color: CHARACTERS[activeChar].color, fontWeight: 700 }}>
                         {CHARACTERS[activeChar].name} · {CHARACTERS[activeChar].title}
@@ -536,6 +694,7 @@ ${isNewDish ? `服务员端上"${DISHES[dishIdx].name}"。生成场景+2-3角色
                       <div className="mt-1" style={{ color: "#e8d5a8", lineHeight: 1.5 }}>{CHARACTERS[activeChar].persona}</div>
                     </div>
                   )}
+
                   {scoreLog.length > 0 && (
                     <div className="mt-3 pt-3 border-t" style={{ borderColor: "#5c3a2a" }}>
                       <div className="text-xs mb-1" style={{ color: "#9c8068" }}>评分日志</div>
@@ -552,6 +711,26 @@ ${isNewDish ? `服务员端上"${DISHES[dishIdx].name}"。生成场景+2-3角色
                   {history.map((h, i) => {
                     if (h.type === "narration") {
                       return <div key={i} className="text-center text-xs italic py-2" style={{ color: "#9c8068" }}>{h.text}</div>;
+                    }
+                    // 突发事件高亮卡片
+                    if (h.type === "event") {
+                      return (
+                        <div key={i} className="my-3 p-3 rounded-lg" style={{
+                          background: "linear-gradient(135deg, rgba(168,50,50,0.15), rgba(201,165,88,0.1))",
+                          border: "1px solid #a83232", boxShadow: "0 0 10px rgba(168,50,50,0.2)"
+                        }}>
+                          <div className="flex items-center gap-2 mb-2">
+                            <Zap className="w-4 h-4" style={{ color: "#ff9090" }} />
+                            <span className="text-xs tracking-widest font-bold" style={{ color: "#ff9090" }}>突发事件</span>
+                          </div>
+                          <div className="text-base mb-1" style={{ color: "#c9a558", fontFamily: "'Ma Shan Zheng', cursive" }}>
+                            {h.title}
+                          </div>
+                          <div className="text-sm" style={{ color: "#e8d5a8", fontFamily: "'Noto Sans SC', sans-serif", lineHeight: 1.6 }}>
+                            {h.text}
+                          </div>
+                        </div>
+                      );
                     }
                     if (h.type === "user") {
                       return (
@@ -570,9 +749,8 @@ ${isNewDish ? `服务员端上"${DISHES[dishIdx].name}"。生成场景+2-3角色
                     if (!c) return null;
                     return (
                       <div key={i} className="flex gap-2">
-                        <div className="flex-shrink-0 w-8 h-8 rounded-full flex items-center justify-center text-xs font-bold"
-                          style={{ background: c.color, color: "#fff" }}>{c.short.slice(0, 1)}</div>
-                        <div className="flex-1">
+                        <CharAvatar charId={h.char_id} size={32} showImages={showImages} />
+                        <div className="flex-1 min-w-0">
                           <div className="text-xs mb-1" style={{ color: c.color, fontWeight: 700 }}>{c.name}</div>
                           <div className="px-3 py-2 rounded-lg inline-block max-w-full" style={{
                             background: "rgba(255,255,255,0.05)", color: "#e8d5a8",
@@ -606,11 +784,11 @@ ${isNewDish ? `服务员端上"${DISHES[dishIdx].name}"。生成场景+2-3角色
                 <div className="p-3 border-t flex gap-2" style={{ borderColor: "#5c3a2a" }}>
                   <input value={input} onChange={e => setInput(e.target.value)}
                     onKeyDown={e => e.key === "Enter" && handleSend()}
-                    placeholder="说点什么... (敬酒、附和、开黄腔、或者... 拒绝?)"
-                    disabled={loading}
+                    placeholder={turnInDish >= MAX_TURNS_PER_DISH ? "服务员要收盘子了..." : "说点什么..."}
+                    disabled={loading || turnInDish >= MAX_TURNS_PER_DISH}
                     className="flex-1 px-3 py-2 rounded text-sm outline-none"
                     style={{ background: "rgba(0,0,0,0.4)", color: "#e8d5a8", border: "1px solid #5c3a2a", fontFamily: "'Noto Sans SC', sans-serif" }} />
-                  <button onClick={handleSend} disabled={loading || !input.trim()}
+                  <button onClick={handleSend} disabled={loading || !input.trim() || turnInDish >= MAX_TURNS_PER_DISH}
                     className="px-4 rounded transition-all disabled:opacity-40"
                     style={{ background: "#c9a558", color: "#2a1208" }}>
                     <Send className="w-4 h-4" />
@@ -658,8 +836,7 @@ ${isNewDish ? `服务员端上"${DISHES[dishIdx].name}"。生成场景+2-3角色
                 background: "rgba(201,165,88,0.08)", border: "1px solid #5c3a2a", color: "#9c8068"
               }}>
                 喜欢这局?可以<button onClick={() => setShowDonate(true)} className="underline mx-1" style={{color:"#c9a558"}}>请作者一杯</button>
-                或<button onClick={() => { setKeyInput(userKey); setShowSettings(true); }} className="underline mx-1" style={{color:"#5a7a3e"}}>填自己的 Key</button>
-                继续畅玩
+                或<button onClick={() => { setKeyInput(userKey); setShowSettings(true); }} className="underline mx-1" style={{color:"#5a7a3e"}}>填自己的 Key</button>继续畅玩
               </div>
             )}
 
@@ -672,11 +849,10 @@ ${isNewDish ? `服务员端上"${DISHES[dishIdx].name}"。生成场景+2-3角色
         )}
       </div>
 
-      {/* ====== 页脚:精简版免责声明 ====== */}
+      {/* 页脚 */}
       {!showDisclaimerBlocker && (
         <footer className="border-t mt-8 py-6 px-4" style={{
-          borderColor: "#5c3a2a", background: "rgba(0,0,0,0.3)",
-          fontFamily: "'Noto Sans SC', sans-serif"
+          borderColor: "#5c3a2a", background: "rgba(0,0,0,0.3)", fontFamily: "'Noto Sans SC', sans-serif"
         }}>
           <div className="max-w-3xl mx-auto text-xs leading-relaxed text-center" style={{ color: "#9c8068" }}>
             <div className="mb-2 whitespace-pre-line">{DISCLAIMER_SHORT.trim()}</div>
@@ -689,26 +865,23 @@ ${isNewDish ? `服务员端上"${DISHES[dishIdx].name}"。生成场景+2-3角色
         </footer>
       )}
 
-      {/* ====== 首次进入:必须确认的免责声明 ====== */}
+      {/* 首次免责拦截 */}
       {showDisclaimerBlocker && (
         <div className="fixed inset-0 z-50 flex items-center justify-center p-4" style={{
           background: "rgba(0,0,0,0.95)", backdropFilter: "blur(8px)"
         }}>
           <div className="max-w-2xl w-full max-h-[90vh] flex flex-col rounded-lg" style={{
-            background: "#2a1810", border: "2px solid #5c3a2a",
-            fontFamily: "'Noto Sans SC', sans-serif"
+            background: "#2a1810", border: "2px solid #5c3a2a", fontFamily: "'Noto Sans SC', sans-serif"
           }}>
             <div className="p-6 border-b flex items-center gap-3" style={{ borderColor: "#5c3a2a" }}>
               <ShieldAlert className="w-6 h-6 flex-shrink-0" style={{ color: "#c9a558" }} />
-              <h2 className="text-2xl" style={{
-                color: "#c9a558", fontFamily: "'Ma Shan Zheng', cursive"
-              }}>{FIRST_VISIT_TITLE}</h2>
+              <h2 className="text-2xl" style={{ color: "#c9a558", fontFamily: "'Ma Shan Zheng', cursive" }}>
+                {FIRST_VISIT_TITLE}
+              </h2>
             </div>
-
             <div className="flex-1 overflow-y-auto p-6 text-sm" style={{ color: "#e8d5a8" }}>
               {renderRichText(DISCLAIMER_FULL)}
             </div>
-
             <div className="p-6 border-t flex flex-col sm:flex-row gap-3" style={{ borderColor: "#5c3a2a" }}>
               <button onClick={declineDisclaimer}
                 className="flex-1 px-4 py-3 rounded text-sm transition-all hover:opacity-80"
@@ -717,10 +890,7 @@ ${isNewDish ? `服务员端上"${DISHES[dishIdx].name}"。生成场景+2-3角色
               </button>
               <button onClick={acceptDisclaimer}
                 className="flex-1 px-4 py-3 rounded text-sm transition-all hover:opacity-80"
-                style={{
-                  background: "linear-gradient(135deg, #c9a558 0%, #a8842d 100%)",
-                  color: "#2a1208", fontWeight: 600
-                }}>
+                style={{ background: "linear-gradient(135deg, #c9a558 0%, #a8842d 100%)", color: "#2a1208", fontWeight: 600 }}>
                 {ACKNOWLEDGE_BUTTON}
               </button>
             </div>
@@ -728,19 +898,14 @@ ${isNewDish ? `服务员端上"${DISHES[dishIdx].name}"。生成场景+2-3角色
         </div>
       )}
 
-      {/* ====== 查看完整免责声明 (任意时刻可调出) ====== */}
+      {/* 完整声明 */}
       {showFullDisclaimer && (
-        <div className="fixed inset-0 z-40 flex items-center justify-center p-4" style={{
-          background: "rgba(0,0,0,0.8)"
-        }}>
+        <div className="fixed inset-0 z-40 flex items-center justify-center p-4" style={{ background: "rgba(0,0,0,0.8)" }}>
           <div className="max-w-2xl w-full max-h-[85vh] flex flex-col rounded-lg" style={{
-            background: "#2a1810", border: "1px solid #5c3a2a",
-            fontFamily: "'Noto Sans SC', sans-serif"
+            background: "#2a1810", border: "1px solid #5c3a2a", fontFamily: "'Noto Sans SC', sans-serif"
           }}>
             <div className="p-5 border-b flex items-center justify-between" style={{ borderColor: "#5c3a2a" }}>
-              <h2 className="text-xl" style={{
-                color: "#c9a558", fontFamily: "'Ma Shan Zheng', cursive"
-              }}>完整免责声明</h2>
+              <h2 className="text-xl" style={{ color: "#c9a558", fontFamily: "'Ma Shan Zheng', cursive" }}>完整免责声明</h2>
               <button onClick={() => setShowFullDisclaimer(false)}
                 className="p-1 rounded hover:bg-stone-800" style={{ color: "#9c8068" }}>
                 <X className="w-5 h-5" />
@@ -753,7 +918,7 @@ ${isNewDish ? `服务员端上"${DISHES[dishIdx].name}"。生成场景+2-3角色
         </div>
       )}
 
-      {/* ====== 设置弹窗 ====== */}
+      {/* 设置 */}
       {showSettings && (
         <div className="fixed inset-0 z-30 flex items-center justify-center p-4" style={{ background: "rgba(0,0,0,0.7)" }}>
           <div className="max-w-md w-full p-6 rounded-lg relative" style={{
@@ -763,14 +928,12 @@ ${isNewDish ? `服务员端上"${DISHES[dishIdx].name}"。生成场景+2-3角色
               className="absolute top-3 right-3 p-1 rounded hover:bg-stone-800" style={{ color: "#9c8068" }}>
               <X className="w-4 h-4" />
             </button>
-
             <h3 className="text-xl mb-1" style={{ color: "#c9a558", fontFamily: "'Ma Shan Zheng', cursive" }}>
               使用你自己的 Gemini Key
             </h3>
             <p className="text-xs mb-4" style={{ color: "#9c8068" }}>
               填入后所有 API 调用走你的账号,作者不收你一分钱,你想玩多少局都行
             </p>
-
             <div className="space-y-3 text-sm" style={{ color: "#e8d5a8" }}>
               <div>
                 <label className="block text-xs mb-1" style={{ color: "#9c8068" }}>Gemini API Key</label>
@@ -779,7 +942,6 @@ ${isNewDish ? `服务员端上"${DISHES[dishIdx].name}"。生成场景+2-3角色
                   className="w-full px-3 py-2 rounded text-sm outline-none"
                   style={{ background: "rgba(0,0,0,0.4)", color: "#e8d5a8", border: "1px solid #5c3a2a" }} />
               </div>
-
               <div className="text-xs leading-relaxed p-3 rounded" style={{
                 background: "rgba(201,165,88,0.05)", color: "#9c8068", border: "1px solid #5c3a2a"
               }}>
@@ -791,32 +953,24 @@ ${isNewDish ? `服务员端上"${DISHES[dishIdx].name}"。生成场景+2-3角色
                   Key 只存在你的浏览器里,作者看不到。免费额度足够你玩几十局。
                 </div>
               </div>
-
               <div className="flex gap-2 pt-2">
                 <button onClick={saveKey}
                   className="flex-1 px-4 py-2 rounded transition-all hover:opacity-80"
-                  style={{ background: "#c9a558", color: "#2a1208", fontWeight: 600 }}>
-                  保存
-                </button>
+                  style={{ background: "#c9a558", color: "#2a1208", fontWeight: 600 }}>保存</button>
                 {userKey && (
                   <button onClick={() => { setKeyInput(""); }}
                     className="px-3 py-2 rounded text-xs transition-all hover:opacity-80"
-                    style={{ background: "transparent", color: "#9c8068", border: "1px solid #5c3a2a" }}>
-                    清空
-                  </button>
+                    style={{ background: "transparent", color: "#9c8068", border: "1px solid #5c3a2a" }}>清空</button>
                 )}
               </div>
-
               <button onClick={() => { setShowSettings(false); setShowFullDisclaimer(true); }}
-                className="w-full text-xs underline pt-2" style={{ color: "#9c8068" }}>
-                查看完整免责声明
-              </button>
+                className="w-full text-xs underline pt-2" style={{ color: "#9c8068" }}>查看完整免责声明</button>
             </div>
           </div>
         </div>
       )}
 
-      {/* ====== 打赏弹窗 ====== */}
+      {/* 打赏 */}
       {showDonate && (
         <div className="fixed inset-0 z-30 flex items-center justify-center p-4" style={{ background: "rgba(0,0,0,0.7)" }}>
           <div className="max-w-md w-full p-6 rounded-lg relative" style={{
@@ -826,22 +980,15 @@ ${isNewDish ? `服务员端上"${DISHES[dishIdx].name}"。生成场景+2-3角色
               className="absolute top-3 right-3 p-1 rounded hover:bg-stone-800" style={{ color: "#9c8068" }}>
               <X className="w-4 h-4" />
             </button>
-
-            <h3 className="text-xl mb-1" style={{ color: "#c9a558", fontFamily: "'Ma Shan Zheng', cursive" }}>
-              请作者一杯
-            </h3>
+            <h3 className="text-xl mb-1" style={{ color: "#c9a558", fontFamily: "'Ma Shan Zheng', cursive" }}>请作者一杯</h3>
             <p className="text-xs mb-4" style={{ color: "#9c8068" }}>
               这游戏每局 AI 调用花作者几毛钱。如果让你笑了一下,可以小小赞助一下,鼓励多写点
             </p>
-
             <div className="grid grid-cols-2 gap-3">
               <div className="text-center">
-                <div className="aspect-square rounded-lg flex items-center justify-center mb-2 overflow-hidden" style={{
-                  background: "#fff", border: "1px solid #5c3a2a"
-                }}>
+                <div className="aspect-square rounded-lg flex items-center justify-center mb-2 overflow-hidden" style={{ background: "#fff", border: "1px solid #5c3a2a" }}>
                   {/* eslint-disable-next-line @next/next/no-img-element */}
-                  <img src="/donate-wechat.jpg" alt="微信收款码"
-                    className="w-full h-full object-contain"
+                  <img src="/donate-wechat.jpg" alt="微信收款码" className="w-full h-full object-contain"
                     onError={(e) => { e.target.style.display = 'none'; e.target.nextSibling.style.display = 'flex'; }} />
                   <div className="w-full h-full hidden items-center justify-center text-xs p-2" style={{ color: "#9c8068" }}>
                     把微信收款码<br/>命名为<br/>donate-wechat.jpg<br/>放在 /public 目录
@@ -849,14 +996,10 @@ ${isNewDish ? `服务员端上"${DISHES[dishIdx].name}"。生成场景+2-3角色
                 </div>
                 <div className="text-xs" style={{ color: "#5a7a3e" }}>微信</div>
               </div>
-
               <div className="text-center">
-                <div className="aspect-square rounded-lg flex items-center justify-center mb-2 overflow-hidden" style={{
-                  background: "#fff", border: "1px solid #5c3a2a"
-                }}>
+                <div className="aspect-square rounded-lg flex items-center justify-center mb-2 overflow-hidden" style={{ background: "#fff", border: "1px solid #5c3a2a" }}>
                   {/* eslint-disable-next-line @next/next/no-img-element */}
-                  <img src="/donate-alipay.jpg" alt="支付宝收款码"
-                    className="w-full h-full object-contain"
+                  <img src="/donate-alipay.jpg" alt="支付宝收款码" className="w-full h-full object-contain"
                     onError={(e) => { e.target.style.display = 'none'; e.target.nextSibling.style.display = 'flex'; }} />
                   <div className="w-full h-full hidden items-center justify-center text-xs p-2" style={{ color: "#9c8068" }}>
                     把支付宝收款码<br/>命名为<br/>donate-alipay.jpg<br/>放在 /public 目录
@@ -865,10 +1008,8 @@ ${isNewDish ? `服务员端上"${DISHES[dishIdx].name}"。生成场景+2-3角色
                 <div className="text-xs" style={{ color: "#3a6e8e" }}>支付宝</div>
               </div>
             </div>
-
             <p className="text-xs italic text-center mt-4" style={{ color: "#9c8068" }}>
-              不打赏也完全没关系,代码会一直跑下去。<br/>
-              想白嫖请玩自己的 key,作者也乐见。
+              不打赏也完全没关系,代码会一直跑下去。<br/>想白嫖请玩自己的 key,作者也乐见。
             </p>
           </div>
         </div>
