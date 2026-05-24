@@ -1,7 +1,12 @@
 "use client";
 
 import React, { useState, useEffect, useRef } from "react";
-import { Send, Loader2, RotateCcw, ChevronRight, Skull } from "lucide-react";
+import { Send, Loader2, RotateCcw, ChevronRight, Skull, Settings, Coffee, X, ExternalLink, FileText, ShieldAlert } from "lucide-react";
+import {
+  DISCLAIMER_SHORT, DISCLAIMER_FULL,
+  ACKNOWLEDGE_BUTTON, DECLINE_BUTTON,
+  FIRST_VISIT_TITLE, DECLINE_REDIRECT_URL, DISCLAIMER_VERSION
+} from "./disclaimer-content";
 
 // ============ 角色配置 ============
 const CHARACTERS = {
@@ -53,7 +58,6 @@ const CHARACTERS = {
 
 const CHAR_ORDER = ["zhuren","wudong","fuzong","kezhang","xiaoLiu","xiaoQian","baogong","laohu","sijiQiang","guanxihu","mishu"];
 
-// ============ 菜品配置 ============
 const DISHES = [
   { name: "凉拌黄瓜", note: "形似某物 · 必有人开黄腔" },
   { name: "海参捞饭", note: "贵气 · 主任和吴总互相夹给对方" },
@@ -69,7 +73,54 @@ const DISHES = [
   { name: "三十年茅台压轴", note: "最后的劝酒高潮 · 不喝就是不给面子" }
 ];
 
-// ============ 主组件 ============
+const LS_KEY_API = "sds_user_gemini_key";
+const LS_KEY_GAMES = "sds_games_played";
+const LS_KEY_DISCLAIMER = "sds_disclaimer_accepted";
+
+// ============ Markdown 渲染助手 ============
+// 支持 **加粗** 和 - 列表项,段落用空行分隔
+function renderRichText(text) {
+  const paragraphs = text.trim().split(/\n\s*\n/);
+  return paragraphs.map((para, pi) => {
+    const lines = para.split("\n");
+    const isList = lines.every(l => l.trim().startsWith("- ") || l.trim() === "");
+
+    if (isList) {
+      return (
+        <ul key={pi} className="mb-3 space-y-1" style={{ paddingLeft: "1em" }}>
+          {lines.filter(l => l.trim()).map((line, li) => (
+            <li key={li} style={{ listStyle: "none", position: "relative" }}>
+              <span style={{ position: "absolute", left: "-1em", color: "#9c8068" }}>·</span>
+              {renderBold(line.trim().slice(2))}
+            </li>
+          ))}
+        </ul>
+      );
+    }
+
+    return (
+      <p key={pi} className="mb-3 leading-relaxed">
+        {lines.map((line, li) => (
+          <React.Fragment key={li}>
+            {renderBold(line)}
+            {li < lines.length - 1 && <br />}
+          </React.Fragment>
+        ))}
+      </p>
+    );
+  });
+}
+
+function renderBold(text) {
+  const parts = text.split(/(\*\*[^*]+\*\*)/g);
+  return parts.map((p, i) => {
+    if (p.startsWith("**") && p.endsWith("**")) {
+      return <strong key={i} style={{ color: "#c9a558" }}>{p.slice(2, -2)}</strong>;
+    }
+    return <React.Fragment key={i}>{p}</React.Fragment>;
+  });
+}
+
 export default function ShandongSimulator() {
   const [phase, setPhase] = useState("intro");
   const [dishIdx, setDishIdx] = useState(0);
@@ -82,25 +133,77 @@ export default function ShandongSimulator() {
   const [error, setError] = useState(null);
   const [finalReport, setFinalReport] = useState(null);
   const [activeChar, setActiveChar] = useState(null);
+
+  const [userKey, setUserKey] = useState("");
+  const [showSettings, setShowSettings] = useState(false);
+  const [showDonate, setShowDonate] = useState(false);
+  const [gamesPlayed, setGamesPlayed] = useState(0);
+  const [keyInput, setKeyInput] = useState("");
+
+  // 免责声明状态
+  const [disclaimerAccepted, setDisclaimerAccepted] = useState(true); // 默认 true 避免 SSR 闪烁
+  const [showFullDisclaimer, setShowFullDisclaimer] = useState(false);
+  const [hydrated, setHydrated] = useState(false);
+
   const scrollRef = useRef(null);
+
+  useEffect(() => {
+    if (typeof window !== "undefined") {
+      const k = localStorage.getItem(LS_KEY_API) || "";
+      const g = parseInt(localStorage.getItem(LS_KEY_GAMES) || "0", 10);
+      const accepted = localStorage.getItem(LS_KEY_DISCLAIMER) === DISCLAIMER_VERSION;
+      setUserKey(k);
+      setKeyInput(k);
+      setGamesPlayed(g);
+      setDisclaimerAccepted(accepted);
+      setHydrated(true);
+    }
+  }, []);
 
   useEffect(() => {
     if (scrollRef.current) scrollRef.current.scrollTop = scrollRef.current.scrollHeight;
   }, [history, loading]);
 
-  // ========= 调用后端 API =========
+  const acceptDisclaimer = () => {
+    if (typeof window !== "undefined") {
+      localStorage.setItem(LS_KEY_DISCLAIMER, DISCLAIMER_VERSION);
+    }
+    setDisclaimerAccepted(true);
+  };
+
+  const declineDisclaimer = () => {
+    if (DECLINE_REDIRECT_URL && typeof window !== "undefined") {
+      window.location.href = DECLINE_REDIRECT_URL;
+    } else if (typeof window !== "undefined") {
+      window.close();
+    }
+  };
+
+  const saveKey = () => {
+    const k = keyInput.trim();
+    if (typeof window !== "undefined") {
+      if (k) localStorage.setItem(LS_KEY_API, k);
+      else localStorage.removeItem(LS_KEY_API);
+    }
+    setUserKey(k);
+    setShowSettings(false);
+  };
+
   const callBackend = async (systemPrompt, userMessage) => {
     const res = await fetch("/api/chat", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ system: systemPrompt, user: userMessage }),
+      body: JSON.stringify({
+        system: systemPrompt,
+        user: userMessage,
+        userKey: userKey || undefined,
+      }),
     });
     const data = await res.json();
     if (!res.ok) throw new Error(data.error || "未知错误");
     return data;
   };
 
-  // ========= 游戏主循环 =========
   const callGM = async (userAction, isNewDish = false) => {
     setLoading(true);
     setError(null);
@@ -112,46 +215,41 @@ export default function ShandongSimulator() {
       return `${CHARACTERS[h.char_id]?.name}: ${h.text}`;
     }).join("\n");
 
-    const sysPrompt = `你是一个讽刺剧的游戏总监(Game Master),运行一个名为《山东酒桌模拟器》的黑色幽默讽刺游戏。
+    const sysPrompt = `你是一个讽刺剧的游戏总监(Game Master),运行《山东酒桌模拟器》黑色幽默讽刺游戏。
 
-【讽刺基调】这是对中国部分地区酒桌文化异化现象的讽刺,不是对地域人群的概括,而是对一种**权力结构下的人性扭曲**的批判。玩家分数越"高"(谄媚+猥琐),越是揭露玩家被这个体制同化。秘书小林等弱势角色应该被同情地刻画。
+【讽刺基调】对中国部分地区酒桌文化异化的讽刺,不针对地域人群,而是批判权力结构下的人性扭曲。玩家分数越高(谄媚+猥琐),越揭示玩家被同化。秘书小林等弱势角色应被同情刻画。
 
 【11个角色】
 ${charList}
 
 【当前情况】
-- 当前菜品(第${dishIdx+1}/12道): ${DISHES[dishIdx].name} · ${DISHES[dishIdx].note}
-- 当前分数: 谄媚${scores.flattery} 猥琐${scores.lewdness} 人格${scores.dignity}
+- 菜品(第${dishIdx+1}/12道): ${DISHES[dishIdx].name} · ${DISHES[dishIdx].note}
+- 分数: 谄媚${scores.flattery} 猥琐${scores.lewdness} 人格${scores.dignity}
 - 最近对话:
 ${recentHistory || "(刚开始)"}
 
 【刚刚发生】
-${isNewDish ? `服务员刚端上"${DISHES[dishIdx].name}"。请生成场景描述+2-3个角色对这道菜的反应(围绕菜名/外形/位置做文章,主任/吴总/科长/老胡等会率先发挥)。` : `玩家(小李)说: "${userAction}"`}
+${isNewDish ? `服务员端上"${DISHES[dishIdx].name}"。生成场景+2-3角色反应。` : `玩家(小李)说: "${userAction}"`}
 
-【输出要求】严格按以下JSON格式输出:
+【输出 JSON 格式,所有内容简洁】
 {
-  "narration": "可选的场景描述,如'李主任慢慢举起酒杯',无场景则为null",
-  "responses": [
-    {"char_id": "角色ID", "text": "角色台词,符合其口吻"}
-  ],
-  "score_delta": {"flattery": 0-15整数, "lewdness": 0-15整数, "dignity": -10到5整数},
-  "score_reason": "简短解释为什么这样评分"
+  "narration": "简短场景描述(<=50字),无则 null",
+  "responses": [{"char_id": "ID", "text": "<=60字台词"}],
+  "score_delta": {"flattery": 0-15, "lewdness": 0-15, "dignity": -10到5},
+  "score_reason": "简短理由"
 }
 
-【关键要求】
-1. responses 1-3条,只让最相关的角色说话(不是全部11个)
-2. 角色台词要鲜活,符合身份和口吻,可用'诶呀'、'我跟你讲'、方言感
-3. 竞争者小刘要经常找机会拆你台
-4. 秘书小林被骚扰时表现要让玩家不适——这是讽刺核心,不要写成调情
-5. 黄段子可以暗示但不直接露骨,重点是讽刺感
-6. 玩家若反抗/保持尊严 → 人格上升,谄媚下降;玩家若卑躬屈膝 → 谄媚飙升,人格下降
-7. 玩家若开黄腔/猥琐 → 猥琐指数上升,人格下降,秘书小林会表现不适`;
+【关键】
+1. 1-3条响应,最相关的角色
+2. 台词鲜活有方言感
+3. 竞争者小刘常拆你台
+4. 秘书小林被骚扰要让玩家不适——讽刺核心
+5. 玩家反抗→人格上升;卑躬屈膝→谄媚上升;开黄腔→猥琐上升`;
 
     const userMsg = isNewDish ? "请生成上菜场景和角色反应" : userAction;
 
     try {
       const parsed = await callBackend(sysPrompt, userMsg);
-
       const newHistory = [...history];
       if (!isNewDish && userAction) newHistory.push({ type: "user", text: userAction });
       if (parsed.narration) newHistory.push({ type: "narration", text: parsed.narration });
@@ -179,10 +277,7 @@ ${isNewDish ? `服务员刚端上"${DISHES[dishIdx].name}"。请生成场景描�
   };
 
   const nextDish = async () => {
-    if (dishIdx >= 11) {
-      await generateFinalReport();
-      return;
-    }
+    if (dishIdx >= 11) { await generateFinalReport(); return; }
     setDishIdx(d => d + 1);
     setTurnInDish(0);
     setHistory(h => [...h, { type: "narration", text: `———— 第 ${dishIdx + 2} 道菜 ————` }]);
@@ -198,26 +293,21 @@ ${isNewDish ? `服务员刚端上"${DISHES[dishIdx].name}"。请生成场景描�
   const generateFinalReport = async () => {
     setLoading(true);
     try {
-      const sysPrompt = "你是一个讽刺剧的总结员,用黑色幽默风格输出 JSON。";
-      const userMsg = `这是一个讽刺酒桌文化游戏的终局。请基于玩家的分数生成100-200字的黑色幽默总结。
+      const sysPrompt = "你是讽刺剧总结员,用黑色幽默风格输出 JSON。";
+      const userMsg = `游戏终局总结。
+最终分数: 谄媚${scores.flattery} 猥琐${scores.lewdness} 人格${scores.dignity}
 
-最终分数:
-- 谄媚指数: ${scores.flattery}/100
-- 猥琐指数: ${scores.lewdness}/100
-- 人格剩余: ${scores.dignity}/100
-
-要求:
-1. 黑色幽默和讽刺口吻
-2. 揭示玩家这一晚到底"成功"了什么、"失去"了什么
-3. 谄媚+猥琐都高 → 你是"酒桌精英"但已失去灵魂
-4. 人格高 → 你被排挤了但你还是你
-5. 给出一个称号(如"酒桌新贵"/"清流孤客"/"卑微的胜利者")
-
-严格按 JSON 输出: {"title": "称号", "verdict": "200字总结", "consequence": "今晚之后会发生什么(一句话)"}`;
+输出 JSON: {"title": "称号", "verdict": "100-150字黑色幽默总结", "consequence": "一句话后续"}`;
 
       const parsed = await callBackend(sysPrompt, userMsg);
       setFinalReport(parsed);
       setPhase("ending");
+
+      if (typeof window !== "undefined") {
+        const next = gamesPlayed + 1;
+        localStorage.setItem(LS_KEY_GAMES, String(next));
+        setGamesPlayed(next);
+      }
     } catch (e) {
       setFinalReport({
         title: "酒局散场",
@@ -248,8 +338,7 @@ ${isNewDish ? `服务员刚端上"${DISHES[dishIdx].name}"。请生成场景描�
   };
 
   const SeatingTable = () => {
-    const cx = 150, cy = 150, r = 105;
-    const total = 12;
+    const cx = 150, cy = 150, r = 105, total = 12;
     return (
       <svg viewBox="0 0 300 300" className="w-full h-full">
         <defs>
@@ -270,7 +359,6 @@ ${isNewDish ? `服务员刚端上"${DISHES[dishIdx].name}"。请生成场景描�
         <text x={cx} y={cy + 10} textAnchor="middle" fontSize="9" fill="#e8d5a8">
           {DISHES[dishIdx]?.name.length > 6 ? DISHES[dishIdx]?.name.slice(0,5)+'…' : DISHES[dishIdx]?.name}
         </text>
-
         {CHAR_ORDER.map((cid) => {
           const c = CHARACTERS[cid];
           const angle = (c.seat / total) * 2 * Math.PI - Math.PI / 2;
@@ -303,13 +391,47 @@ ${isNewDish ? `服务员刚端上"${DISHES[dishIdx].name}"。请生成场景描�
     );
   };
 
+  const showFreemiumNudge = phase === "intro" && gamesPlayed >= 1 && !userKey;
+  const showDisclaimerBlocker = hydrated && !disclaimerAccepted;
+
   return (
-    <div className="min-h-screen w-full" style={{
+    <div className="min-h-screen w-full relative" style={{
       background: "radial-gradient(ellipse at top, #4a1f15 0%, #2a1208 40%, #1a0a04 100%)",
       fontFamily: "'Noto Serif SC', 'Songti SC', serif"
     }}>
-      <div className="max-w-5xl mx-auto px-4 py-6">
+      {/* 右上角控制 */}
+      {!showDisclaimerBlocker && (
+        <div className="absolute top-4 right-4 flex items-center gap-2 z-20">
+          {userKey && (
+            <div className="px-2 py-1 text-xs rounded-full" style={{
+              background: "rgba(90,122,62,0.2)", color: "#a8c084", border: "1px solid #5a7a3e"
+            }}>
+              · 使用自带 key ·
+            </div>
+          )}
+          <button onClick={() => { setKeyInput(userKey); setShowSettings(true); }}
+            className="p-2 rounded-full transition-all hover:bg-stone-800"
+            style={{ background: "rgba(0,0,0,0.4)", border: "1px solid #5c3a2a", color: "#c9a558" }}
+            title="设置 API Key">
+            <Settings className="w-4 h-4" />
+          </button>
+        </div>
+      )}
 
+      {/* 右下角:打赏按钮 */}
+      {!showDisclaimerBlocker && (
+        <button onClick={() => setShowDonate(true)}
+          className="fixed bottom-6 right-6 z-20 flex items-center gap-2 px-4 py-2 rounded-full transition-all hover:scale-105 shadow-lg"
+          style={{
+            background: "linear-gradient(135deg, #c9a558 0%, #a8842d 100%)",
+            color: "#2a1208", fontFamily: "'Noto Sans SC', sans-serif", fontWeight: 500, fontSize: "0.85rem",
+            boxShadow: "0 4px 20px rgba(201,165,88,0.3)"
+          }}>
+          <Coffee className="w-4 h-4" /> 请作者一杯
+        </button>
+      )}
+
+      <div className="max-w-5xl mx-auto px-4 py-6 pb-32">
         {phase === "intro" && (
           <div className="min-h-[80vh] flex flex-col items-center justify-center text-center">
             <div className="mb-4 px-4 py-1 rounded-full text-xs tracking-widest" style={{
@@ -328,7 +450,7 @@ ${isNewDish ? `服务员刚端上"${DISHES[dishIdx].name}"。请生成场景描�
               The Banquet of Souls
             </p>
 
-            <div className="max-w-xl space-y-4 mb-10 text-left" style={{ color: "#e8d5a8", fontFamily: "'Noto Sans SC', sans-serif" }}>
+            <div className="max-w-xl space-y-4 mb-8 text-left" style={{ color: "#e8d5a8", fontFamily: "'Noto Sans SC', sans-serif" }}>
               <p className="leading-relaxed">
                 你叫小李,普通职员。今晚被张副总拽到酒局——李主任主陪,吴总作客,桌上还有八九个各色人等。
               </p>
@@ -336,11 +458,31 @@ ${isNewDish ? `服务员刚端上"${DISHES[dishIdx].name}"。请生成场景描�
                 十二道菜,你要在每道菜上做文章——拍马屁、敬酒、接黄段子、躲明枪暗箭。
                 你的<span style={{color:"#c9a558"}}>谄媚指数</span>和<span style={{color:"#a83232"}}>猥琐指数</span>会被悄悄记录。
               </p>
-              <p className="leading-relaxed text-sm italic" style={{ color: "#9c8068" }}>
-                * 本作讽刺的是酒桌文化下的人性异化,不针对任何地域人群。分数越高,并不是越成功——
-                而是你被同化得越深。
-              </p>
             </div>
+
+            {showFreemiumNudge && (
+              <div className="max-w-xl mb-6 p-4 rounded-lg text-sm" style={{
+                background: "rgba(201,165,88,0.08)", border: "1px solid #5c3a2a",
+                color: "#e8d5a8", fontFamily: "'Noto Sans SC', sans-serif"
+              }}>
+                <div className="mb-2" style={{ color: "#c9a558" }}>· 你已经玩过 {gamesPlayed} 局 ·</div>
+                <div className="leading-relaxed mb-3" style={{ color: "#9c8068" }}>
+                  这游戏每局调用十几次 AI,作者掏的腰包。如果你想继续玩,可以:
+                </div>
+                <div className="flex flex-col sm:flex-row gap-2 justify-center">
+                  <button onClick={() => { setKeyInput(userKey); setShowSettings(true); }}
+                    className="px-4 py-2 rounded text-sm transition-all hover:opacity-80"
+                    style={{ background: "#5a7a3e", color: "#fff" }}>
+                    填入自己的 Key (永久免费)
+                  </button>
+                  <button onClick={() => setShowDonate(true)}
+                    className="px-4 py-2 rounded text-sm transition-all hover:opacity-80"
+                    style={{ background: "rgba(201,165,88,0.2)", color: "#c9a558", border: "1px solid #c9a558" }}>
+                    打赏作者继续 ☕
+                  </button>
+                </div>
+              </div>
+            )}
 
             <button onClick={startGame}
               className="px-8 py-3 rounded-full text-lg transition-all hover:scale-105"
@@ -372,8 +514,7 @@ ${isNewDish ? `服务员刚端上"${DISHES[dishIdx].name}"。请生成场景描�
                 <div key={s.key} className="p-3 rounded-lg" style={{ background: "rgba(0,0,0,0.4)", border: "1px solid #5c3a2a" }}>
                   <div className="text-xs tracking-widest mb-1" style={{ color: "#9c8068" }}>{s.label}</div>
                   <div className="text-2xl mb-1" style={{ color: s.color, fontWeight: 700 }}>
-                    {scores[s.key]}
-                    <span className="text-xs ml-1" style={{ color: "#9c8068" }}>/100</span>
+                    {scores[s.key]}<span className="text-xs ml-1" style={{ color: "#9c8068" }}>/100</span>
                   </div>
                   <div className="h-1 rounded-full overflow-hidden" style={{ background: "rgba(0,0,0,0.5)" }}>
                     <div className="h-full transition-all" style={{ width: `${scores[s.key]}%`, background: s.color }} />
@@ -386,9 +527,7 @@ ${isNewDish ? `服务员刚端上"${DISHES[dishIdx].name}"。请生成场景描�
               <div className="lg:col-span-1">
                 <div className="rounded-lg p-3" style={{ background: "rgba(0,0,0,0.4)", border: "1px solid #5c3a2a" }}>
                   <div className="text-xs tracking-widest mb-2" style={{ color: "#9c8068" }}>圆桌座次 (点头像查看)</div>
-                  <div className="aspect-square">
-                    <SeatingTable />
-                  </div>
+                  <div className="aspect-square"><SeatingTable /></div>
                   {activeChar && (
                     <div className="mt-3 p-2 rounded text-xs" style={{ background: "rgba(201,165,88,0.1)", border: `1px solid ${CHARACTERS[activeChar].color}` }}>
                       <div style={{ color: CHARACTERS[activeChar].color, fontWeight: 700 }}>
@@ -412,11 +551,7 @@ ${isNewDish ? `服务员刚端上"${DISHES[dishIdx].name}"。请生成场景描�
                 <div ref={scrollRef} className="flex-1 overflow-y-auto p-4 space-y-3" style={{ maxHeight: "60vh" }}>
                   {history.map((h, i) => {
                     if (h.type === "narration") {
-                      return (
-                        <div key={i} className="text-center text-xs italic py-2" style={{ color: "#9c8068" }}>
-                          {h.text}
-                        </div>
-                      );
+                      return <div key={i} className="text-center text-xs italic py-2" style={{ color: "#9c8068" }}>{h.text}</div>;
                     }
                     if (h.type === "user") {
                       return (
@@ -436,17 +571,13 @@ ${isNewDish ? `服务员刚端上"${DISHES[dishIdx].name}"。请生成场景描�
                     return (
                       <div key={i} className="flex gap-2">
                         <div className="flex-shrink-0 w-8 h-8 rounded-full flex items-center justify-center text-xs font-bold"
-                          style={{ background: c.color, color: "#fff" }}>
-                          {c.short.slice(0, 1)}
-                        </div>
+                          style={{ background: c.color, color: "#fff" }}>{c.short.slice(0, 1)}</div>
                         <div className="flex-1">
                           <div className="text-xs mb-1" style={{ color: c.color, fontWeight: 700 }}>{c.name}</div>
                           <div className="px-3 py-2 rounded-lg inline-block max-w-full" style={{
                             background: "rgba(255,255,255,0.05)", color: "#e8d5a8",
                             fontFamily: "'Noto Sans SC', sans-serif", fontSize: "0.9rem", lineHeight: 1.6
-                          }}>
-                            {h.text}
-                          </div>
+                          }}>{h.text}</div>
                         </div>
                       </div>
                     );
@@ -457,9 +588,7 @@ ${isNewDish ? `服务员刚端上"${DISHES[dishIdx].name}"。请生成场景描�
                     </div>
                   )}
                   {error && (
-                    <div className="text-xs p-2 rounded" style={{ background: "rgba(168,50,50,0.2)", color: "#ff9090" }}>
-                      {error}
-                    </div>
+                    <div className="text-xs p-2 rounded" style={{ background: "rgba(168,50,50,0.2)", color: "#ff9090" }}>{error}</div>
                   )}
                 </div>
 
@@ -475,18 +604,12 @@ ${isNewDish ? `服务员刚端上"${DISHES[dishIdx].name}"。请生成场景描�
                 </div>
 
                 <div className="p-3 border-t flex gap-2" style={{ borderColor: "#5c3a2a" }}>
-                  <input
-                    value={input}
-                    onChange={e => setInput(e.target.value)}
+                  <input value={input} onChange={e => setInput(e.target.value)}
                     onKeyDown={e => e.key === "Enter" && handleSend()}
                     placeholder="说点什么... (敬酒、附和、开黄腔、或者... 拒绝?)"
                     disabled={loading}
                     className="flex-1 px-3 py-2 rounded text-sm outline-none"
-                    style={{
-                      background: "rgba(0,0,0,0.4)", color: "#e8d5a8",
-                      border: "1px solid #5c3a2a", fontFamily: "'Noto Sans SC', sans-serif"
-                    }}
-                  />
+                    style={{ background: "rgba(0,0,0,0.4)", color: "#e8d5a8", border: "1px solid #5c3a2a", fontFamily: "'Noto Sans SC', sans-serif" }} />
                   <button onClick={handleSend} disabled={loading || !input.trim()}
                     className="px-4 rounded transition-all disabled:opacity-40"
                     style={{ background: "#c9a558", color: "#2a1208" }}>
@@ -510,9 +633,7 @@ ${isNewDish ? `服务员刚端上"${DISHES[dishIdx].name}"。请生成场景描�
             <h2 className="text-5xl md:text-6xl mb-8" style={{
               fontFamily: "'Ma Shan Zheng', cursive", color: "#c9a558",
               textShadow: "0 0 20px rgba(201,165,88,0.4)"
-            }}>
-              {finalReport.title}
-            </h2>
+            }}>{finalReport.title}</h2>
 
             <div className="grid grid-cols-3 gap-4 mb-8 max-w-md w-full">
               {[
@@ -529,10 +650,18 @@ ${isNewDish ? `服务员刚端上"${DISHES[dishIdx].name}"。请生成场景描�
 
             <div className="max-w-xl space-y-4 mb-8" style={{ color: "#e8d5a8", fontFamily: "'Noto Sans SC', sans-serif" }}>
               <p className="leading-relaxed">{finalReport.verdict}</p>
-              <p className="italic text-sm" style={{ color: "#a8748a" }}>
-                {finalReport.consequence}
-              </p>
+              <p className="italic text-sm" style={{ color: "#a8748a" }}>{finalReport.consequence}</p>
             </div>
+
+            {!userKey && (
+              <div className="mb-6 p-3 rounded-lg max-w-md text-xs" style={{
+                background: "rgba(201,165,88,0.08)", border: "1px solid #5c3a2a", color: "#9c8068"
+              }}>
+                喜欢这局?可以<button onClick={() => setShowDonate(true)} className="underline mx-1" style={{color:"#c9a558"}}>请作者一杯</button>
+                或<button onClick={() => { setKeyInput(userKey); setShowSettings(true); }} className="underline mx-1" style={{color:"#5a7a3e"}}>填自己的 Key</button>
+                继续畅玩
+              </div>
+            )}
 
             <button onClick={reset}
               className="flex items-center gap-2 px-6 py-2 rounded-full text-sm transition-all hover:scale-105"
@@ -542,6 +671,208 @@ ${isNewDish ? `服务员刚端上"${DISHES[dishIdx].name}"。请生成场景描�
           </div>
         )}
       </div>
+
+      {/* ====== 页脚:精简版免责声明 ====== */}
+      {!showDisclaimerBlocker && (
+        <footer className="border-t mt-8 py-6 px-4" style={{
+          borderColor: "#5c3a2a", background: "rgba(0,0,0,0.3)",
+          fontFamily: "'Noto Sans SC', sans-serif"
+        }}>
+          <div className="max-w-3xl mx-auto text-xs leading-relaxed text-center" style={{ color: "#9c8068" }}>
+            <div className="mb-2 whitespace-pre-line">{DISCLAIMER_SHORT.trim()}</div>
+            <button onClick={() => setShowFullDisclaimer(true)}
+              className="inline-flex items-center gap-1 mt-2 underline transition-all hover:opacity-80"
+              style={{ color: "#c9a558" }}>
+              <FileText className="w-3 h-3" /> 查看完整免责声明
+            </button>
+          </div>
+        </footer>
+      )}
+
+      {/* ====== 首次进入:必须确认的免责声明 ====== */}
+      {showDisclaimerBlocker && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4" style={{
+          background: "rgba(0,0,0,0.95)", backdropFilter: "blur(8px)"
+        }}>
+          <div className="max-w-2xl w-full max-h-[90vh] flex flex-col rounded-lg" style={{
+            background: "#2a1810", border: "2px solid #5c3a2a",
+            fontFamily: "'Noto Sans SC', sans-serif"
+          }}>
+            <div className="p-6 border-b flex items-center gap-3" style={{ borderColor: "#5c3a2a" }}>
+              <ShieldAlert className="w-6 h-6 flex-shrink-0" style={{ color: "#c9a558" }} />
+              <h2 className="text-2xl" style={{
+                color: "#c9a558", fontFamily: "'Ma Shan Zheng', cursive"
+              }}>{FIRST_VISIT_TITLE}</h2>
+            </div>
+
+            <div className="flex-1 overflow-y-auto p-6 text-sm" style={{ color: "#e8d5a8" }}>
+              {renderRichText(DISCLAIMER_FULL)}
+            </div>
+
+            <div className="p-6 border-t flex flex-col sm:flex-row gap-3" style={{ borderColor: "#5c3a2a" }}>
+              <button onClick={declineDisclaimer}
+                className="flex-1 px-4 py-3 rounded text-sm transition-all hover:opacity-80"
+                style={{ background: "transparent", color: "#9c8068", border: "1px solid #5c3a2a" }}>
+                {DECLINE_BUTTON}
+              </button>
+              <button onClick={acceptDisclaimer}
+                className="flex-1 px-4 py-3 rounded text-sm transition-all hover:opacity-80"
+                style={{
+                  background: "linear-gradient(135deg, #c9a558 0%, #a8842d 100%)",
+                  color: "#2a1208", fontWeight: 600
+                }}>
+                {ACKNOWLEDGE_BUTTON}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* ====== 查看完整免责声明 (任意时刻可调出) ====== */}
+      {showFullDisclaimer && (
+        <div className="fixed inset-0 z-40 flex items-center justify-center p-4" style={{
+          background: "rgba(0,0,0,0.8)"
+        }}>
+          <div className="max-w-2xl w-full max-h-[85vh] flex flex-col rounded-lg" style={{
+            background: "#2a1810", border: "1px solid #5c3a2a",
+            fontFamily: "'Noto Sans SC', sans-serif"
+          }}>
+            <div className="p-5 border-b flex items-center justify-between" style={{ borderColor: "#5c3a2a" }}>
+              <h2 className="text-xl" style={{
+                color: "#c9a558", fontFamily: "'Ma Shan Zheng', cursive"
+              }}>完整免责声明</h2>
+              <button onClick={() => setShowFullDisclaimer(false)}
+                className="p-1 rounded hover:bg-stone-800" style={{ color: "#9c8068" }}>
+                <X className="w-5 h-5" />
+              </button>
+            </div>
+            <div className="flex-1 overflow-y-auto p-6 text-sm" style={{ color: "#e8d5a8" }}>
+              {renderRichText(DISCLAIMER_FULL)}
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* ====== 设置弹窗 ====== */}
+      {showSettings && (
+        <div className="fixed inset-0 z-30 flex items-center justify-center p-4" style={{ background: "rgba(0,0,0,0.7)" }}>
+          <div className="max-w-md w-full p-6 rounded-lg relative" style={{
+            background: "#2a1810", border: "1px solid #5c3a2a", fontFamily: "'Noto Sans SC', sans-serif"
+          }}>
+            <button onClick={() => setShowSettings(false)}
+              className="absolute top-3 right-3 p-1 rounded hover:bg-stone-800" style={{ color: "#9c8068" }}>
+              <X className="w-4 h-4" />
+            </button>
+
+            <h3 className="text-xl mb-1" style={{ color: "#c9a558", fontFamily: "'Ma Shan Zheng', cursive" }}>
+              使用你自己的 Gemini Key
+            </h3>
+            <p className="text-xs mb-4" style={{ color: "#9c8068" }}>
+              填入后所有 API 调用走你的账号,作者不收你一分钱,你想玩多少局都行
+            </p>
+
+            <div className="space-y-3 text-sm" style={{ color: "#e8d5a8" }}>
+              <div>
+                <label className="block text-xs mb-1" style={{ color: "#9c8068" }}>Gemini API Key</label>
+                <input value={keyInput} onChange={e => setKeyInput(e.target.value)}
+                  placeholder="AIza..." type="password"
+                  className="w-full px-3 py-2 rounded text-sm outline-none"
+                  style={{ background: "rgba(0,0,0,0.4)", color: "#e8d5a8", border: "1px solid #5c3a2a" }} />
+              </div>
+
+              <div className="text-xs leading-relaxed p-3 rounded" style={{
+                background: "rgba(201,165,88,0.05)", color: "#9c8068", border: "1px solid #5c3a2a"
+              }}>
+                <div className="mb-2" style={{ color: "#c9a558" }}>怎么拿到 Gemini Key?</div>
+                <div>1. 打开 <a href="https://aistudio.google.com/apikey" target="_blank" rel="noopener noreferrer" className="underline" style={{color:"#c9a558"}}>aistudio.google.com/apikey <ExternalLink className="inline w-3 h-3"/></a></div>
+                <div>2. 登录 Google 账号</div>
+                <div>3. 点 "Create API key",复制 AIza... 开头的字符串</div>
+                <div className="mt-2 pt-2 border-t" style={{ borderColor: "#5c3a2a" }}>
+                  Key 只存在你的浏览器里,作者看不到。免费额度足够你玩几十局。
+                </div>
+              </div>
+
+              <div className="flex gap-2 pt-2">
+                <button onClick={saveKey}
+                  className="flex-1 px-4 py-2 rounded transition-all hover:opacity-80"
+                  style={{ background: "#c9a558", color: "#2a1208", fontWeight: 600 }}>
+                  保存
+                </button>
+                {userKey && (
+                  <button onClick={() => { setKeyInput(""); }}
+                    className="px-3 py-2 rounded text-xs transition-all hover:opacity-80"
+                    style={{ background: "transparent", color: "#9c8068", border: "1px solid #5c3a2a" }}>
+                    清空
+                  </button>
+                )}
+              </div>
+
+              <button onClick={() => { setShowSettings(false); setShowFullDisclaimer(true); }}
+                className="w-full text-xs underline pt-2" style={{ color: "#9c8068" }}>
+                查看完整免责声明
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* ====== 打赏弹窗 ====== */}
+      {showDonate && (
+        <div className="fixed inset-0 z-30 flex items-center justify-center p-4" style={{ background: "rgba(0,0,0,0.7)" }}>
+          <div className="max-w-md w-full p-6 rounded-lg relative" style={{
+            background: "#2a1810", border: "1px solid #5c3a2a", fontFamily: "'Noto Sans SC', sans-serif"
+          }}>
+            <button onClick={() => setShowDonate(false)}
+              className="absolute top-3 right-3 p-1 rounded hover:bg-stone-800" style={{ color: "#9c8068" }}>
+              <X className="w-4 h-4" />
+            </button>
+
+            <h3 className="text-xl mb-1" style={{ color: "#c9a558", fontFamily: "'Ma Shan Zheng', cursive" }}>
+              请作者一杯
+            </h3>
+            <p className="text-xs mb-4" style={{ color: "#9c8068" }}>
+              这游戏每局 AI 调用花作者几毛钱。如果让你笑了一下,可以小小赞助一下,鼓励多写点
+            </p>
+
+            <div className="grid grid-cols-2 gap-3">
+              <div className="text-center">
+                <div className="aspect-square rounded-lg flex items-center justify-center mb-2 overflow-hidden" style={{
+                  background: "#fff", border: "1px solid #5c3a2a"
+                }}>
+                  {/* eslint-disable-next-line @next/next/no-img-element */}
+                  <img src="/donate-wechat.jpg" alt="微信收款码"
+                    className="w-full h-full object-contain"
+                    onError={(e) => { e.target.style.display = 'none'; e.target.nextSibling.style.display = 'flex'; }} />
+                  <div className="w-full h-full hidden items-center justify-center text-xs p-2" style={{ color: "#9c8068" }}>
+                    把微信收款码<br/>命名为<br/>donate-wechat.jpg<br/>放在 /public 目录
+                  </div>
+                </div>
+                <div className="text-xs" style={{ color: "#5a7a3e" }}>微信</div>
+              </div>
+
+              <div className="text-center">
+                <div className="aspect-square rounded-lg flex items-center justify-center mb-2 overflow-hidden" style={{
+                  background: "#fff", border: "1px solid #5c3a2a"
+                }}>
+                  {/* eslint-disable-next-line @next/next/no-img-element */}
+                  <img src="/donate-alipay.jpg" alt="支付宝收款码"
+                    className="w-full h-full object-contain"
+                    onError={(e) => { e.target.style.display = 'none'; e.target.nextSibling.style.display = 'flex'; }} />
+                  <div className="w-full h-full hidden items-center justify-center text-xs p-2" style={{ color: "#9c8068" }}>
+                    把支付宝收款码<br/>命名为<br/>donate-alipay.jpg<br/>放在 /public 目录
+                  </div>
+                </div>
+                <div className="text-xs" style={{ color: "#3a6e8e" }}>支付宝</div>
+              </div>
+            </div>
+
+            <p className="text-xs italic text-center mt-4" style={{ color: "#9c8068" }}>
+              不打赏也完全没关系,代码会一直跑下去。<br/>
+              想白嫖请玩自己的 key,作者也乐见。
+            </p>
+          </div>
+        </div>
+      )}
     </div>
   );
 }
