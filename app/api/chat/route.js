@@ -34,7 +34,7 @@ export async function POST(request) {
         generationConfig: {
           responseMimeType: "application/json",
           temperature: 0.95,
-          maxOutputTokens: 4000,
+          maxOutputTokens: 8000,
         },
         safetySettings: [
           { category: "HARM_CATEGORY_HARASSMENT", threshold: "BLOCK_NONE" },
