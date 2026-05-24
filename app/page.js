@@ -74,9 +74,26 @@ const DISHES = [
   { name: "三十年茅台压轴", note: "最后劝酒高潮 · 不喝就是不给面子", orientation: "酒瓶置于主位前", orientTo: "zhuren" }
 ];
 
-const MAX_TURNS_PER_DISH = 5;
+// ============ 游戏模式 ============
+const MODES = {
+  standard: {
+    name: "标准酒局",
+    desc: "12 道菜 · 每道最多 5 轮",
+    duration: "约 15-25 分钟",
+    dishIndices: [0,1,2,3,4,5,6,7,8,9,10,11], // 全部 12 道
+    turnsPerDish: 5
+  },
+  fast: {
+    name: "速战速决",
+    desc: "4 道菜 · 每道最多 3 轮",
+    duration: "约 5-8 分钟",
+    dishIndices: [0, 3, 7, 11], // 黄瓜、糖醋鱼、扒鸡、压轴茅台
+    turnsPerDish: 3
+  }
+};
 
 const LS_KEY_API = "sds_user_gemini_key";
+const LS_KEY_MODE = "sds_game_mode";
 const LS_KEY_GAMES = "sds_games_played";
 const LS_KEY_DISCLAIMER = "sds_disclaimer_accepted";
 const LS_KEY_IMAGES = "sds_images_enabled";
@@ -204,6 +221,9 @@ export default function ShandongSimulator() {
   // 图片开关
   const [showImages, setShowImages] = useState(false);
 
+  // 游戏模式
+  const [gameMode, setGameMode] = useState("standard");
+
   const scrollRef = useRef(null);
 
   useEffect(() => {
@@ -212,6 +232,8 @@ export default function ShandongSimulator() {
       const g = parseInt(localStorage.getItem(LS_KEY_GAMES) || "0", 10);
       const accepted = localStorage.getItem(LS_KEY_DISCLAIMER) === DISCLAIMER_VERSION;
       const img = localStorage.getItem(LS_KEY_IMAGES) === "1";
+      const savedMode = localStorage.getItem(LS_KEY_MODE);
+      if (savedMode && MODES[savedMode]) setGameMode(savedMode);
       setUserKey(k);
       setKeyInput(k);
       setGamesPlayed(g);
@@ -280,7 +302,11 @@ export default function ShandongSimulator() {
       return `${CHARACTERS[h.char_id]?.name}: ${h.text}`;
     }).join("\n");
 
-    const currentDish = DISHES[dishIdx];
+    const mode = MODES[gameMode];
+    const activeDishes = mode.dishIndices.map(i => DISHES[i]);
+    const maxTurns = mode.turnsPerDish;
+    const totalDishes = activeDishes.length;
+    const currentDish = activeDishes[dishIdx];
     const orientInfo = currentDish.orientation ? `朝向: ${currentDish.orientation}(${CHARACTERS[currentDish.orientTo]?.name}位置)` : "";
 
     const sysPrompt = `你是讽刺剧游戏总监,运行《山东酒桌模拟器》黑色幽默讽刺游戏。
@@ -290,10 +316,10 @@ export default function ShandongSimulator() {
 【11个角色】
 ${charList}
 
-【当前菜品】第${dishIdx+1}/12道: ${currentDish.name} · ${currentDish.note} ${orientInfo}
+【当前菜品】第${dishIdx+1}/${totalDishes}道: ${currentDish.name} · ${currentDish.note} ${orientInfo}
 
 【当前分数】谄媚${scores.flattery} 猥琐${scores.lewdness} 人格${scores.dignity}
-【已对话轮次】${turnInDish}/${MAX_TURNS_PER_DISH}
+【已对话轮次】${turnInDish}/${maxTurns}
 【最近对话】
 ${recentHistory || "(刚开始)"}
 
@@ -315,7 +341,7 @@ ${isNewDish ? `服务员端上"${currentDish.name}"。${currentDish.orientation 
 如要触发事件,在 JSON 中加入 event 字段:
 "event": {"type": "事件类型", "title": "短标题如'强制敬酒!'", "description": "30-80字事件描述"}
 
-事件应带来戏剧性,但不要每道菜都触发。前期(1-3道菜)少触发,中后期(5道之后)多触发。
+事件应带来戏剧性,但不要每道菜都触发。游戏前半段少触发,后半段多触发。
 
 【输出 JSON,简洁】
 {
@@ -370,7 +396,7 @@ ${isNewDish ? `服务员端上"${currentDish.name}"。${currentDish.orientation 
       if (!isNewDish) {
         const nextTurn = turnInDish + 1;
         setTurnInDish(nextTurn);
-        if (nextTurn >= MAX_TURNS_PER_DISH) {
+        if (nextTurn >= maxTurns) {
           setHistory(h => [...h, { type: "narration", text: "(服务员端着新菜走来,招呼要换盘子...)" }]);
           setTimeout(() => nextDish(), 2200);
         }
@@ -383,7 +409,8 @@ ${isNewDish ? `服务员端上"${currentDish.name}"。${currentDish.orientation 
   };
 
   const nextDish = async () => {
-    if (dishIdx >= 11) { await generateFinalReport(); return; }
+    const totalDishes = MODES[gameMode].dishIndices.length;
+    if (dishIdx >= totalDishes - 1) { await generateFinalReport(); return; }
     setDishIdx(d => d + 1);
     setTurnInDish(0);
     setHistory(h => [...h, { type: "narration", text: `———— 第 ${dishIdx + 2} 道菜 ————` }]);
@@ -442,7 +469,8 @@ ${isNewDish ? `服务员端上"${currentDish.name}"。${currentDish.orientation 
   // ============ 圆桌 SVG ============
   const SeatingTable = () => {
     const cx = 150, cy = 150, r = 105, total = 12;
-    const currentDish = DISHES[dishIdx];
+    const activeDishes = MODES[gameMode].dishIndices.map(i => DISHES[i]);
+    const currentDish = activeDishes[dishIdx];
 
     // 朝向箭头
     let arrowEl = null;
@@ -523,7 +551,10 @@ ${isNewDish ? `服务员端上"${currentDish.name}"。${currentDish.orientation 
 
   const showFreemiumNudge = phase === "intro" && gamesPlayed >= 1 && !userKey;
   const showDisclaimerBlocker = hydrated && !disclaimerAccepted;
-  const currentDish = DISHES[dishIdx];
+  const activeDishes = MODES[gameMode].dishIndices.map(i => DISHES[i]);
+  const maxTurns = MODES[gameMode].turnsPerDish;
+  const totalDishes = activeDishes.length;
+  const currentDish = activeDishes[dishIdx];
 
   return (
     <div className="min-h-screen w-full relative" style={{
@@ -588,7 +619,7 @@ ${isNewDish ? `服务员端上"${currentDish.name}"。${currentDish.orientation 
                 你叫小李,普通职员。今晚被张副总拽到酒局——李主任主陪,吴总作客,桌上还有八九个各色人等。
               </p>
               <p className="leading-relaxed">
-                十二道菜,每道菜最多五轮对话。你要在每道菜上做文章——拍马屁、敬酒、躲突发事件、应付明枪暗箭。你的<span style={{color:"#c9a558"}}>谄媚指数</span>和<span style={{color:"#a83232"}}>猥琐指数</span>会被悄悄记录。
+                {MODES[gameMode].dishIndices.length} 道菜,每道菜最多 {MODES[gameMode].turnsPerDish} 轮对话。你要在每道菜上做文章——拍马屁、敬酒、躲突发事件、应付明枪暗箭。你的<span style={{color:"#c9a558"}}>谄媚指数</span>和<span style={{color:"#a83232"}}>猥琐指数</span>会被悄悄记录。
               </p>
             </div>
 
@@ -616,6 +647,41 @@ ${isNewDish ? `服务员端上"${currentDish.name}"。${currentDish.orientation 
               </div>
             )}
 
+            {/* 模式选择 */}
+            <div className="max-w-xl w-full mb-6" style={{ fontFamily: "'Noto Sans SC', sans-serif" }}>
+              <div className="text-xs tracking-widest mb-3 text-center" style={{ color: "#9c8068" }}>
+                · 选择模式 ·
+              </div>
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                {Object.entries(MODES).map(([key, m]) => {
+                  const isSelected = gameMode === key;
+                  return (
+                    <button key={key} onClick={() => {
+                      setGameMode(key);
+                      if (typeof window !== "undefined") localStorage.setItem(LS_KEY_MODE, key);
+                    }}
+                      className="p-4 rounded-lg text-left transition-all hover:scale-[1.02]"
+                      style={{
+                        background: isSelected ? "rgba(201,165,88,0.15)" : "rgba(0,0,0,0.3)",
+                        border: `1px solid ${isSelected ? "#c9a558" : "#5c3a2a"}`,
+                        boxShadow: isSelected ? "0 0 12px rgba(201,165,88,0.2)" : "none"
+                      }}>
+                      <div className="flex items-baseline gap-2 mb-1">
+                        <div style={{
+                          fontFamily: "'Ma Shan Zheng', cursive",
+                          fontSize: "1.5rem",
+                          color: isSelected ? "#c9a558" : "#9c8068"
+                        }}>{m.name}</div>
+                        {isSelected && <span style={{ color: "#c9a558", fontSize: "0.75rem" }}>✓</span>}
+                      </div>
+                      <div className="text-xs" style={{ color: "#e8d5a8" }}>{m.desc}</div>
+                      <div className="text-xs italic mt-1" style={{ color: "#9c8068" }}>{m.duration}</div>
+                    </button>
+                  );
+                })}
+              </div>
+            </div>
+
             <button onClick={startGame}
               className="px-8 py-3 rounded-full text-lg transition-all hover:scale-105"
               style={{
@@ -631,10 +697,10 @@ ${isNewDish ? `服务员端上"${currentDish.name}"。${currentDish.orientation 
             <div className="mb-4 grid grid-cols-1 md:grid-cols-4 gap-3">
               <div className="md:col-span-1 p-3 rounded-lg" style={{ background: "rgba(0,0,0,0.4)", border: "1px solid #5c3a2a" }}>
                 <div className="text-xs tracking-widest mb-1" style={{ color: "#9c8068" }}>
-                  进度 · 本轮 {turnInDish}/{MAX_TURNS_PER_DISH}
+                  进度 · 本轮 {turnInDish}/{maxTurns}
                 </div>
                 <div className="text-xl" style={{ color: "#c9a558", fontFamily: "'Ma Shan Zheng', cursive" }}>
-                  {dishIdx + 1} / 12
+                  {dishIdx + 1} / {totalDishes}
                 </div>
                 <div className="text-xs mt-1" style={{ color: "#e8d5a8" }}>{currentDish?.name}</div>
                 {currentDish?.orientation && (
@@ -784,11 +850,11 @@ ${isNewDish ? `服务员端上"${currentDish.name}"。${currentDish.orientation 
                 <div className="p-3 border-t flex gap-2" style={{ borderColor: "#5c3a2a" }}>
                   <input value={input} onChange={e => setInput(e.target.value)}
                     onKeyDown={e => e.key === "Enter" && handleSend()}
-                    placeholder={turnInDish >= MAX_TURNS_PER_DISH ? "服务员要收盘子了..." : "说点什么..."}
-                    disabled={loading || turnInDish >= MAX_TURNS_PER_DISH}
+                    placeholder={turnInDish >= maxTurns ? "服务员要收盘子了..." : "说点什么..."}
+                    disabled={loading || turnInDish >= maxTurns}
                     className="flex-1 px-3 py-2 rounded text-sm outline-none"
                     style={{ background: "rgba(0,0,0,0.4)", color: "#e8d5a8", border: "1px solid #5c3a2a", fontFamily: "'Noto Sans SC', sans-serif" }} />
-                  <button onClick={handleSend} disabled={loading || !input.trim() || turnInDish >= MAX_TURNS_PER_DISH}
+                  <button onClick={handleSend} disabled={loading || !input.trim() || turnInDish >= maxTurns}
                     className="px-4 rounded transition-all disabled:opacity-40"
                     style={{ background: "#c9a558", color: "#2a1208" }}>
                     <Send className="w-4 h-4" />
@@ -796,7 +862,7 @@ ${isNewDish ? `服务员端上"${currentDish.name}"。${currentDish.orientation 
                   <button onClick={nextDish} disabled={loading || turnInDish < 1}
                     className="px-3 rounded transition-all disabled:opacity-30 flex items-center gap-1 text-xs"
                     style={{ background: "rgba(201,165,88,0.15)", color: "#c9a558", border: "1px solid #c9a558" }}>
-                    {dishIdx >= 11 ? "散席" : "下一道"} <ChevronRight className="w-3 h-3" />
+                    {dishIdx >= totalDishes - 1 ? "散席" : "下一道"} <ChevronRight className="w-3 h-3" />
                   </button>
                 </div>
               </div>
